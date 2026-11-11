@@ -984,6 +984,7 @@ class Processor:
         self._offset = offset
         self._obj = None
         self._user_types = {}
+        self._bit_types = {}
         self._input = input.split('\n')
 
     def do_symbol(self, symdef, gen):
@@ -1005,6 +1006,18 @@ class Processor:
         num = self.get_line_from_sym(sym)
         return '%i: %s' % (num, self.get_source_line(num))
 
+    def _bit_type(self, nbits, shift, subgen=None):
+        key = (nbits, shift, subgen)
+        bit_type = self._bit_types.get(key)
+        if bit_type is None:
+            class bitDE(bitDataElement):
+                _nbits = nbits
+                _shift = shift
+                _subgen = subgen or bitDataElement._subgen
+
+            bit_type = self._bit_types[key] = bitDE
+        return bit_type
+
     def do_bitfield(self, dtype, bitfield):
         bytes = self._types[dtype](self._data, 0).size() // 8
         bitsleft = bytes * 8
@@ -1022,11 +1035,7 @@ class Processor:
             if bitsleft < 0:
                 raise ParseError("Invalid bitfield spec")
 
-            class bitDE(bitDataElement):
-                _nbits = bits
-                _shift = bitsleft
-                _subgen = self._types[dtype]
-
+            bitDE = self._bit_type(bits, bitsleft, self._types[dtype])
             self._generators[name] = bitDE(self._data, self._offset)
             self._lines[name] = self.get_line_from_sym(defn[0])
             bitsleft -= bits
@@ -1041,10 +1050,8 @@ class Processor:
         if count % 8 != 0:
             raise ValueError("bit array must be divisible by 8.")
 
-        class bitDE(bitDataElement):
-            _nbits = 1
-            _shift = (8 - i % 8) if bigendian else (i % 8) + 1
-
+        shift = (8 - i % 8) if bigendian else (i % 8) + 1
+        bitDE = self._bit_type(1, shift)
         return bitDE(self._data, self._offset)
 
     def parse_defn(self, defn):
@@ -1071,17 +1078,18 @@ class Processor:
                           name, self.get_line_sym(sym), newname, prevline)
                 name = newname
             res = arrayDataElement(self._offset)
-            size = 0
+            is_bits = dtype in ("bit", "lbit")
+            if not is_bits and count > 0:
+                elem_type = self._types[dtype]
+                elem_bytes = elem_type(self._data, 0).size() // 8
             for i in range(0, count):
-                if dtype == "bit":
-                    gen = self.do_bitarray(i, count)
-                    self._offset += int((i+1) % 8 == 0)
-                elif dtype == "lbit":
-                    gen = self.do_bitarray(i, count, bigendian=False)
+                if is_bits:
+                    gen = self.do_bitarray(i, count,
+                                           bigendian=(dtype == "bit"))
                     self._offset += int((i+1) % 8 == 0)
                 else:
-                    gen = self._types[dtype](self._data, self._offset)
-                    self._offset += (gen.size() // 8)
+                    gen = elem_type(self._data, self._offset)
+                    self._offset += elem_bytes
                 res.append(gen)
 
             if defn[1][0] != "array":
