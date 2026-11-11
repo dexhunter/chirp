@@ -984,6 +984,7 @@ class Processor:
         self._offset = offset
         self._obj = None
         self._user_types = {}
+        self._bitfield_classes = {}
         self._input = input.split('\n')
 
     def do_symbol(self, symdef, gen):
@@ -1006,8 +1007,11 @@ class Processor:
         return '%i: %s' % (num, self.get_source_line(num))
 
     def do_bitfield(self, dtype, bitfield):
-        bytes = self._types[dtype](self._data, 0).size() // 8
+        subgen = self._types[dtype]
+        bytes = subgen(self._data, 0).size() // 8
         bitsleft = bytes * 8
+        # Reuse one bitDE class per (bits, shift) for each dtype
+        classes = self._bitfield_classes.setdefault(dtype, {})
 
         for _bitdef, defn in bitfield:
             name = defn[0][1]
@@ -1022,10 +1026,13 @@ class Processor:
             if bitsleft < 0:
                 raise ParseError("Invalid bitfield spec")
 
-            class bitDE(bitDataElement):
-                _nbits = bits
-                _shift = bitsleft
-                _subgen = self._types[dtype]
+            bitDE = classes.get((bits, bitsleft))
+            if bitDE is None:
+                class bitDE(bitDataElement):
+                    _nbits = bits
+                    _shift = bitsleft
+                    _subgen = subgen
+                classes[bits, bitsleft] = bitDE
 
             self._generators[name] = bitDE(self._data, self._offset)
             self._lines[name] = self.get_line_from_sym(defn[0])
